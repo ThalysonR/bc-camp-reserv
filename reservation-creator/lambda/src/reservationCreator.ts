@@ -22,13 +22,13 @@ import {
 } from 'rxjs';
 import { NoResultsError, RetryableError } from './errors';
 
-function getBrowser(): Promise<Browser> {
+async function getBrowser(): Promise<Browser> {
   return puppeteer.launch({
-    // args: chromium.args,
+    args: chromium.args,
     defaultViewport: chromium.defaultViewport,
-    // executablePath: await chromium.executablePath(),
-    executablePath: '/usr/bin/google-chrome',
-    headless: false
+    executablePath: await chromium.executablePath(),
+    // executablePath: '/usr/bin/google-chrome',
+    headless: true
   });
 }
 
@@ -127,10 +127,9 @@ async function reserve(
   await (
     await page.waitForSelector('#cardCvv')
   )?.type(props.cardDetails.securityCode.toString(), { delay: 50 });
+  await (await page.waitForSelector('#applyPaymentButton'))?.click();
   return 'SUCCESS';
 }
-
-// chromium.setHeadlessMode = true;
 
 export function makeReservation(
   props: CreateReservation
@@ -140,20 +139,26 @@ export function makeReservation(
     take(1),
     map(async (input) => {
       const browser = await getBrowser();
-      const page = await browser.newPage();
-      await page.goto('http://camping.bcparks.ca');
-      await login(props.authDetails, page);
-      logger.info('Navigating to resource page');
-      await page.goto(createLink(input));
-      const reserveFn = await reserve(
-        {
-          ...input,
-          ...props
-        },
-        page
-      );
-      await browser.close();
-      return reserveFn;
+      try {
+        const page = await browser.newPage();
+        await page.goto('http://camping.bcparks.ca');
+        await login(props.authDetails, page);
+        logger.info('Navigating to resource page');
+        await page.goto(createLink(input));
+        const reserveFn = await reserve(
+          {
+            ...input,
+            ...props
+          },
+          page
+        );
+        return reserveFn;
+      } catch (e) {
+        logger.error(e, 'Error occurred. Catching to close browser');
+        throw e;
+      } finally {
+        await browser.close();
+      }
     }),
     concatMap((reserveFn) => from(reserveFn)),
     catchError((e: Error) => {
@@ -183,14 +188,23 @@ export async function fromNotification(
 ) {
   const browser = await getBrowser();
   const page = await browser.newPage();
-  await page.goto('http://camping.bcparks.ca');
-  await page.waitForNavigation();
-  await login(reservationDetails.authDetails, page);
-  await page.waitForNavigation();
-  (await page.$$('[id^="view-on-map"]')).at(0)?.click();
-  await page.waitForNavigation();
-  await (await page.$$('[data-availability="icon-available"]')).at(0)?.click();
-  await reserve(reservationDetails, page);
+  try {
+    await page.goto('http://camping.bcparks.ca');
+    await page.waitForNavigation();
+    await login(reservationDetails.authDetails, page);
+    await page.waitForNavigation();
+    await page.goto('http://camping.bcparks.ca/account/notification-dashboard');
+    (await page.$$('[id^="view-on-map"]')).at(0)?.click();
+    await page.waitForNavigation();
+    await (await page.$$('[data-availability="icon-available"]'))
+      .at(0)
+      ?.click();
+    await reserve(reservationDetails, page);
+  } catch (e) {
+    logger.error('Error occurred. Catching to close browser');
+  } finally {
+    await browser.close();
+  }
 }
 
 function createLink(reservationRequest: ComposeAvailabilityOutput): string {

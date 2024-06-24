@@ -1,9 +1,6 @@
 import { program } from 'commander';
 import Table from 'cli-table3';
-import {
-  BcCampingClient,
-  ComposeAvailabilityInput
-} from 'reservation-creator';
+import { BcCampingClient, ComposeAvailabilityInput } from 'reservation-creator';
 import { initializeLog } from 'reservation-creator';
 import { makeReservation } from 'reservation-creator';
 import { getComposedAvailability } from 'reservation-creator';
@@ -172,9 +169,9 @@ program
         }
       ],
       nights: '1',
-      preferWeekend: false,
+      preferWeekend: false
     });
-    await makeReservation({
+    makeReservation({
       source$,
       partyInfo: {
         adults: 4
@@ -191,7 +188,7 @@ program
         retryIntervalInSecs: 2,
         retryTimeInMins: 2
       }
-    });
+    }).subscribe();
   });
 
 program.parse();
