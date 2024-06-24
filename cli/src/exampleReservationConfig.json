@@ -1,0 +1,32 @@
+[
+    {
+        "id": "899d02ec-e8ca-4ca2-882f-30de9299e56f",
+        "locationIds": [
+            "-2147483647",
+            "-2147483606"
+        ],
+        "equipmentId": "-32768",
+        "subEquipmentId": "-32767",
+        "dateRanges": [
+            {
+                "startDate": "2024-07-18",
+                "endDate": "2024-07-19"
+            }
+        ],
+        "nights": "1",
+        "cardDetails": {
+            "number": 123456789,
+            "nameOnCard": "Thalyson Rocha",
+            "securityCode": 123456,
+            "expiringMonth": 12,
+            "expiringYear": 2026
+        },
+        "partyInfo": {
+            "adults": 4
+        },
+        "retryDetails": {
+            "retryTimeInMins": 15,
+            "retryIntervalInSecs": 2
+        }
+    }
+]

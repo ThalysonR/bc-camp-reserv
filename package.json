@@ -1,0 +1,4 @@
+{
+  "private": true,
+  "workspaces": ["reservation-creator", "cli"]
+}

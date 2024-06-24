@@ -1,0 +1,16 @@
+{
+    "cardDetails": {
+        "number": 123456789,
+        "nameOnCard": "Thalyson",
+        "securityCode": 123456,
+        "expiringMonth": 12,
+        "expiringYear": 2026
+    },
+    "partyInfo": {
+        "adults": 4
+    },
+    "authDetails": {
+        "email": "thalyson@hotmail.com",
+        "password": "123456789"
+    }
+}
