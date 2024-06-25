@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
-import { ReservationStack } from '../cdk/reservation.stack';
+import { ReservationStack } from '../lib/reservation.stack';
 
 const app = new cdk.App();
 new ReservationStack(app, 'ReservationStack', {

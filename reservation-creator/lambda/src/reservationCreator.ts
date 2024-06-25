@@ -6,7 +6,7 @@ import {
   ReservationDetails,
   ReservationResult
 } from './types';
-const chromium = require('@sparticuz/chromium');
+import chromium from '@sparticuz/chromium';
 import { logger } from './log';
 import {
   catchError,
@@ -23,16 +23,18 @@ import {
 import { NoResultsError, RetryableError } from './errors';
 
 async function getBrowser(): Promise<Browser> {
+  chromium.setHeadlessMode = true;
   return puppeteer.launch({
     args: chromium.args,
     defaultViewport: chromium.defaultViewport,
     executablePath: await chromium.executablePath(),
     // executablePath: '/usr/bin/google-chrome',
-    headless: true
+    headless: chromium.headless
   });
 }
 
 async function login(authDetails: AuthDetails, page: Page) {
+  logger.info('Logging in');
   const { el: login, type } = await Promise.race([
     page.waitForSelector('#login').then((el) => ({ el, type: 'LOGIN' })),
     page
@@ -44,6 +46,7 @@ async function login(authDetails: AuthDetails, page: Page) {
     return;
   }
   login?.click();
+  logger.info('Clicked login');
   await page.waitForNavigation();
   const cookieBtn = await page.$('#login-cookie-consent');
   if (cookieBtn) {
@@ -54,6 +57,7 @@ async function login(authDetails: AuthDetails, page: Page) {
   await page.type('#password', authDetails.password, { delay: 50 });
   await emailField?.press('Enter');
   await page.waitForNavigation();
+  logger.info('Logged in successfully');
 }
 
 async function reserve(
@@ -89,6 +93,7 @@ async function reserve(
     }
   } while (true);
   await element.elem?.click();
+  logger.info('Added to cart. Proceeding with forms');
   await (await page.waitForSelector('#confirmReservationDetails'))?.click();
   await (await page.waitForSelector('#proceedToCheckout'))?.click();
   await (await page.waitForSelector('#mat-checkbox-2-input'))?.click();
@@ -128,6 +133,7 @@ async function reserve(
     await page.waitForSelector('#cardCvv')
   )?.type(props.cardDetails.securityCode.toString(), { delay: 50 });
   await (await page.waitForSelector('#applyPaymentButton'))?.click();
+  logger.info('Reservation completed successfully');
   return 'SUCCESS';
 }
 
@@ -183,28 +189,42 @@ export function makeReservation(
   );
 }
 
-export async function fromNotification(
+export function fromNotification(
   reservationDetails: ReservationDetails & { authDetails: AuthDetails }
 ) {
-  const browser = await getBrowser();
-  const page = await browser.newPage();
-  try {
-    await page.goto('http://camping.bcparks.ca');
-    await page.waitForNavigation();
-    await login(reservationDetails.authDetails, page);
-    await page.waitForNavigation();
-    await page.goto('http://camping.bcparks.ca/account/notification-dashboard');
-    (await page.$$('[id^="view-on-map"]')).at(0)?.click();
-    await page.waitForNavigation();
-    await (await page.$$('[data-availability="icon-available"]'))
-      .at(0)
-      ?.click();
-    await reserve(reservationDetails, page);
-  } catch (e) {
-    logger.error('Error occurred. Catching to close browser');
-  } finally {
-    await browser.close();
-  }
+  return from(getBrowser()).pipe(
+    map(async (browser) => {
+      const page = await browser.newPage();
+      try {
+        logger.info('Starting process from notification');
+        await page.goto('http://camping.bcparks.ca');
+        await login(reservationDetails.authDetails, page);
+        logger.info('Navigating to notifications page');
+        await page.goto(
+          'http://camping.bcparks.ca/account/notification-dashboard'
+        );
+        await page.waitForNavigation();
+        const availableReservation = await page.$$('[id^="view-on-map"]');
+        if (!availableReservation || availableReservation.length == 0) {
+          logger.info('No reservation available. Exiting');
+          return 'FAILURE';
+        }
+        logger.info('Available reservation found on notifications');
+        await page.waitForNavigation();
+        await (await page.$$('[data-availability="icon-available"]'))
+          .at(0)
+          ?.click();
+        logger.info('Found available resource on map');
+        return await reserve(reservationDetails, page);
+      } catch (e) {
+        logger.error(e, 'Error occurred. Catching to close browser');
+        throw e;
+      } finally {
+        await browser.close();
+      }
+    }),
+    concatMap((reserveFn) => from(reserveFn))
+  );
 }
 
 function createLink(reservationRequest: ComposeAvailabilityOutput): string {

@@ -17,7 +17,8 @@
     "typescript": "5.5.2",
     "@types/node": "20.14.7",
     "@types/aws-lambda": "8.10.140",
-    "aws-cdk": "2.147.0"
+    "aws-cdk": "2.147.0",
+    "esbuild": "0.21.5"
   },
   "dependencies": {
     "puppeteer-core": "^22.6.4",

@@ -8,49 +8,70 @@ import {
   ReservationConfigRecord,
   ReservationResult
 } from './src';
-import { catchError, concat, map, of, toArray } from 'rxjs';
+import {
+  catchError,
+  concat,
+  concatMap,
+  from,
+  lastValueFrom,
+  map,
+  of,
+  reduce,
+  tap
+} from 'rxjs';
 import * as reservationDetails from './reservationDetails.json';
 
-export const handler: ScheduledHandler = async (event: ScheduledEvent) => {
+export const handler: ScheduledHandler = async (
+  event: ScheduledEvent
+): Promise<void> => {
   const body = event.detail;
   const json: { id: string } = JSON.parse(body);
   const input = await getReservationConfigRecordById(json.id);
   if (!!input) {
-    concat(
+    const reservationExecution$ = concat(
       input.map((config) =>
         makeReservation({
           source$: getComposedAvailability({ ...config }),
           ...config,
           authDetails: reservationDetails.authDetails
-        })
-          .pipe(
-            map((result) => ({ result, id: config.id })),
-            catchError(() =>
-              of({ result: 'FAILURE' as ReservationResult, id: config.id })
-            ),
-            toArray()
-          )
-          .subscribe(async (results) => {
-            const succeeded = results.filter(
-              (reservResult) => reservResult.result === 'SUCCESS'
-            );
-            let failed: ReservationConfigRecord = [];
-            if (succeeded.length > 0) {
-              const failed = input.filter((storedConfig) =>
-                results.some(
-                  (reservResult) =>
-                    reservResult.id === storedConfig.id &&
-                    reservResult.result === 'FAILURE'
-                )
-              );
-              await putReservationConfigRecord(json.id, failed);
-            }
-            logger.info(
-              `Execution Summary. Succeeded: ${succeeded.length}. Failed: ${failed.length}`
-            );
-          })
+        }).pipe(
+          catchError(() =>
+            of({ result: 'FAILURE' as ReservationResult, id: config.id })
+          ),
+          map((result) => ({ result, id: config.id }))
+        )
       )
+    ).pipe(
+      concatMap((obs) => obs),
+      reduce(
+        (acc, result) => {
+          result.result === 'FAILURE'
+            ? acc.failures.push(result.id)
+            : acc.success.push(result.id);
+          return acc;
+        },
+        { success: [], failures: [] } as {
+          success: string[];
+          failures: string[];
+        }
+      ),
+      tap((result) =>
+        logger.info(
+          `CreateReservation execution summary: Success = ${result.success.length}; Failures: ${result.failures.length}`
+        )
+      ),
+      concatMap((result) => {
+        if (result.success.length > 0) {
+          const toUpdate: ReservationConfigRecord = input.filter(
+            (storedConfig) =>
+              result.failures.some((id) => id === storedConfig.id)
+          );
+          return from(putReservationConfigRecord(json.id, toUpdate));
+        }
+        return of(void 0);
+      })
     );
+    return await lastValueFrom(reservationExecution$);
   } else {
     logger.info('No configuration found');
   }

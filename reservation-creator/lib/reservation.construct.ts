@@ -1,9 +1,13 @@
 import { Construct } from 'constructs';
-import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
-import { Code, LayerVersion } from 'aws-cdk-lib/aws-lambda';
+import {
+  NodejsFunction,
+  NodejsFunctionProps
+} from 'aws-cdk-lib/aws-lambda-nodejs';
+import { LayerVersion } from 'aws-cdk-lib/aws-lambda';
 import { TableV2, AttributeType } from 'aws-cdk-lib/aws-dynamodb';
 import * as ses from 'aws-cdk-lib/aws-ses';
 import { Lambda } from 'aws-cdk-lib/aws-ses-actions';
+import { Duration } from 'aws-cdk-lib';
 
 export class ReservationConstruct extends Construct {
   constructor(scope: Construct, id: string) {
@@ -14,15 +18,20 @@ export class ReservationConstruct extends Construct {
       'chromium-lambda-layer',
       'arn:aws:lambda:us-east-1:764866452798:layer:chrome-aws-lambda:45'
     );
+    const commonProps: NodejsFunctionProps = {
+      memorySize: 1024,
+      handler: 'handler',
+      bundling: {
+        externalModules: ['@sparticuz/chromium'],
+        minify: true
+      },
+      layers: [chromiumLayer],
+      timeout: Duration.minutes(15)
+    };
     const reservationFunction = new NodejsFunction(this, 'createReservation', {
       functionName: 'CreateReservation',
-      code: Code.fromAsset('lambda'),
-      handler: 'createReservation.handler',
-      memorySize: 1024,
-      bundling: {
-        externalModules: ['@sparticuz/chromium']
-      },
-      layers: [chromiumLayer]
+      entry: './lambda/createReservation.ts',
+      ...commonProps
     });
 
     const reservationFromNotificationFunction = new NodejsFunction(
@@ -30,13 +39,8 @@ export class ReservationConstruct extends Construct {
       'createReservationFromNotification',
       {
         functionName: 'CreateReservationFromNotification',
-        code: Code.fromAsset('lambda'),
-        handler: 'createReservationFromNotification.handler',
-        memorySize: 1024,
-        bundling: {
-          externalModules: ['@sparticuz/chromium']
-        },
-        layers: [chromiumLayer]
+        entry: './lambda/createReservationFromNotification.ts',
+        ...commonProps
       }
     );
 
