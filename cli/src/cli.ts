@@ -176,14 +176,7 @@ program
       partyInfo: {
         adults: 4
       },
-      cardDetails: {
-        expiringMonth: 12,
-        expiringYear: 2026,
-        nameOnCard: 'Thalyson Rocha',
-        number: 123456789,
-        securityCode: 1234
-      },
-      authDetails: reservationDetails.authDetails,
+      ...reservationDetails,
       retryDetails: {
         retryIntervalInSecs: 2,
         retryTimeInMins: 2
