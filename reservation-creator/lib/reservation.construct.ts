@@ -5,9 +5,9 @@ import {
 } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LayerVersion } from 'aws-cdk-lib/aws-lambda';
 import { TableV2, AttributeType } from 'aws-cdk-lib/aws-dynamodb';
-import * as ses from 'aws-cdk-lib/aws-ses';
-import { Lambda } from 'aws-cdk-lib/aws-ses-actions';
 import { Duration } from 'aws-cdk-lib';
+import * as ses from 'aws-cdk-lib/aws-ses';
+import { Lambda, LambdaInvocationType } from 'aws-cdk-lib/aws-ses-actions';
 
 export class ReservationConstruct extends Construct {
   constructor(scope: Construct, id: string) {
@@ -51,14 +51,20 @@ export class ReservationConstruct extends Construct {
     table.grantReadWriteData(reservationFunction);
     table.grantReadWriteData(reservationFromNotificationFunction);
 
-    new ses.ReceiptRuleSet(this, 'RuleSet', {
+    new ses.ReceiptRuleSet(this, `InboundEmailRuleset`, {
       rules: [
         {
+          enabled: true,
+          receiptRuleName: 'InboundEmailLambda',
+          recipients: ['thalysrc.com'],
           actions: [
             new Lambda({
-              function: reservationFromNotificationFunction
+              function: reservationFromNotificationFunction,
+              invocationType: LambdaInvocationType.EVENT
             })
-          ]
+          ],
+          // Enable this to block spam emails if needed for your use case
+          scanEnabled: true
         }
       ]
     });

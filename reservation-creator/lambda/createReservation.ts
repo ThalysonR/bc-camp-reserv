@@ -19,7 +19,7 @@ import {
   reduce,
   tap
 } from 'rxjs';
-import * as reservationDetails from './reservationDetails.json';
+import * as reservationDetails from './defaultReservationDetails.json';
 
 export const handler: ScheduledHandler = async (
   event: ScheduledEvent

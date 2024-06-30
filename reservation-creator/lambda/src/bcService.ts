@@ -9,12 +9,17 @@ import {
   shareReplay,
   tap
 } from 'rxjs';
-import { ComposeAvailabilityInput, ComposeAvailabilityOutput } from './types';
+import {
+  ComposeAvailabilityInput,
+  ComposeAvailabilityOutput,
+  ComposedMaps,
+  ComposedResourceLocations
+} from './types';
 import { BcCampingClient } from './client';
 import { dateTimeToDate, mergeDateRanges } from './helper';
-import { MapResource } from './client/model/map';
-import { ResourceLocation } from './client/model/resourceLocation';
 import { logger } from './log';
+import { ParkMap } from './client/model/map';
+import { ResourceLocation } from './client/model/resourceLocation';
 
 export function getComposedAvailability({
   locationIds,
@@ -22,54 +27,13 @@ export function getComposedAvailability({
   subEquipmentId,
   dateRanges,
   nights,
-  preferWeekend
+  preferWeekend,
+  mapsResourceLocation$
 }: ComposeAvailabilityInput): Observable<ComposeAvailabilityOutput> {
   const client = new BcCampingClient(fetch);
   const mergedDateRanges = mergeDateRanges(dateRanges);
-  const mapsResourceLocations$ = client.getMaps().pipe(
-    tap(() => logger.info('requesting maps')),
-    map((maps) =>
-      maps.filter(
-        (map) =>
-          !!map.resourceLocationId &&
-          map.mapResources.length > 0 &&
-          locationIds.includes(map.resourceLocationId.toString())
-      )
-    ),
-    map((maps) =>
-      maps.reduce((obj, entry) => {
-        obj[entry.resourceLocationId] = [
-          ...(obj[entry.resourceLocationId] || []),
-          ...entry.mapResources.map((resources) => ({
-            ...resources,
-            mapId: entry.mapId.toString()
-          }))
-        ];
-        return obj;
-      }, {} as Record<string, (MapResource & { mapId: string })[]>)
-    ),
-    delay(1000),
-    combineLatestWith(
-      client.getResourceLocations().pipe(
-        tap(() => logger.info('requesting resource locations')),
-        map((resourceLocations) =>
-          resourceLocations.filter((resourceLocation) =>
-            locationIds.includes(resourceLocation.resourceLocationId.toString())
-          )
-        ),
-        map(
-          (resourceLocations) =>
-            Object.fromEntries(
-              resourceLocations.map((resourceLocation) => [
-                [resourceLocation.resourceLocationId],
-                resourceLocation
-              ])
-            ) as Record<string, ResourceLocation>
-        )
-      )
-    ),
-    shareReplay()
-  );
+  const mapsResourceLocations$ =
+    mapsResourceLocation$ ?? composeMapsResourceLocations(locationIds);
 
   return mapsResourceLocations$.pipe(
     concatMap(([maps, resourceLocations]) =>
@@ -140,5 +104,60 @@ export function getComposedAvailability({
           availability.end === dateRange.endDate
       )
     )
+  );
+}
+
+export function composeMapsResourceLocations(
+  locationIds?: string[],
+  maps$?: Observable<ParkMap[]>,
+  resourceLocations$?: Observable<ResourceLocation[]>
+): Observable<[ComposedMaps, ComposedResourceLocations]> {
+  const client = new BcCampingClient(fetch);
+  return (maps$ ?? client.getMaps()).pipe(
+    tap(() => logger.info('requesting maps')),
+    map((maps) =>
+      maps.filter(
+        (map) =>
+          !!map.resourceLocationId &&
+          map.mapResources.length > 0 &&
+          (locationIds?.includes(map.resourceLocationId.toString()) ?? true)
+      )
+    ),
+    map((maps) =>
+      maps.reduce((obj, entry) => {
+        obj[entry.resourceLocationId] = [
+          ...(obj[entry.resourceLocationId] || []),
+          ...entry.mapResources.map((resources) => ({
+            ...resources,
+            mapId: entry.mapId.toString()
+          }))
+        ];
+        return obj;
+      }, {} as ComposedMaps)
+    ),
+    delay(1000),
+    combineLatestWith(
+      (resourceLocations$ ?? client.getResourceLocations()).pipe(
+        tap(() => logger.info('requesting resource locations')),
+        map((resourceLocations) =>
+          resourceLocations.filter(
+            (resourceLocation) =>
+              locationIds?.includes(
+                resourceLocation.resourceLocationId.toString()
+              ) ?? true
+          )
+        ),
+        map(
+          (resourceLocations) =>
+            Object.fromEntries(
+              resourceLocations.map((resourceLocation) => [
+                [resourceLocation.resourceLocationId],
+                resourceLocation
+              ])
+            ) as ComposedResourceLocations
+        )
+      )
+    ),
+    shareReplay()
   );
 }

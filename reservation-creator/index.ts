@@ -1,3 +1,3 @@
 export * from './lambda/src';
-import * as reservationDetails from './lambda/reservationDetails.json';
+import * as reservationDetails from './lambda/defaultReservationDetails.json';
 export { reservationDetails };

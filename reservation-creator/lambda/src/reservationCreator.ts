@@ -1,4 +1,3 @@
-import puppeteer, { Browser, ElementHandle, Page } from 'puppeteer-core';
 import {
   AuthDetails,
   ComposeAvailabilityOutput,
@@ -10,131 +9,276 @@ import chromium from '@sparticuz/chromium';
 import { logger } from './log';
 import {
   catchError,
+  combineLatestWith,
   concatMap,
+  delay,
+  EMPTY,
   from,
+  iif,
   map,
   Observable,
   of,
+  race,
+  raceWith,
   retry,
+  switchMap,
   take,
-  throwError,
+  tap,
   throwIfEmpty
 } from 'rxjs';
 import { NoResultsError, RetryableError } from './errors';
+import {
+  BrowserWrapper,
+  PageWrapper,
+  puppeteerWrapper
+} from './puppeteer.wrapper';
 
-async function getBrowser(): Promise<Browser> {
+function asyncTap<T>(cb: (input: T) => Observable<any> | undefined) {
+  return function (source: Observable<T>): Observable<T> {
+    return source.pipe(
+      switchMap((srcVal) => cb(srcVal)?.pipe(map(() => srcVal)) ?? of(srcVal))
+    );
+  };
+}
+
+function getBrowser(): Observable<BrowserWrapper> {
   chromium.setHeadlessMode = true;
-  return puppeteer.launch({
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
-    // executablePath: '/usr/bin/google-chrome',
-    headless: chromium.headless
-  });
+  return from(chromium.executablePath()).pipe(
+    concatMap((executablePath) =>
+      puppeteerWrapper({
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath
+        // executablePath: '/usr/bin/google-chrome',
+        // headless: false
+      })
+    )
+  );
 }
 
-async function login(authDetails: AuthDetails, page: Page) {
-  logger.info('Logging in');
-  const { el: login, type } = await Promise.race([
-    page.waitForSelector('#login').then((el) => ({ el, type: 'LOGIN' })),
-    page
-      .waitForSelector('#welcomeButton')
-      .then((el) => ({ el, type: 'WELCOME' }))
-  ]);
-  if (type === 'WELCOME') {
-    logger.info('Already logged in. Skipping');
-    return;
-  }
-  login?.click();
-  logger.info('Clicked login');
-  await page.waitForNavigation();
-  const cookieBtn = await page.$('#login-cookie-consent');
-  if (cookieBtn) {
-    cookieBtn.click();
-  }
-  const emailField = await page.waitForSelector('#email');
-  await emailField?.type(authDetails.email, { delay: 50 });
-  await page.type('#password', authDetails.password, { delay: 50 });
-  await emailField?.press('Enter');
-  await page.waitForNavigation();
-  logger.info('Logged in successfully');
+function login(authDetails: AuthDetails, page: PageWrapper): Observable<any> {
+  const login$ = page.waitForSelector('#login').pipe(
+    tap(() => logger.info('Logging in')),
+    asyncTap((el) => el?.click()),
+    delay(500),
+    asyncTap(() =>
+      page
+        .$('#login-cookie-consent')
+        .pipe(asyncTap((cookieBtn) => (cookieBtn ? cookieBtn.click() : EMPTY)))
+    ),
+    asyncTap(() =>
+      page
+        .waitForSelector('#email')
+        .pipe(
+          asyncTap((email) => email?.type(authDetails.email, { delay: 50 }))
+        )
+    ),
+    asyncTap(() =>
+      page.waitForSelector('#password').pipe(
+        asyncTap((password) =>
+          password?.type(authDetails.password, { delay: 50 })
+        ),
+        asyncTap((password) => password?.press('Enter'))
+      )
+    ),
+    asyncTap(() => page.waitForNavigation()),
+    tap(() => logger.info('Logged in successfully'))
+  );
+
+  const alreadyLoggedIn$ = page
+    .waitForSelector('#welcomeButton')
+    .pipe(tap(() => logger.info('Already logged in. Skipping')));
+  return race(login$, alreadyLoggedIn$);
 }
 
-async function reserve(
+function reserve(
   props: ReservationDetails,
-  page: Page
-): Promise<ReservationResult> {
+  page: PageWrapper
+): Observable<ReservationResult> {
   const retryDeadline = new Date(
     Date.now() + (props.retryDetails?.retryTimeInMins || 0) * 60000
   );
   const retryIntervalInSecs = props.retryDetails?.retryIntervalInSecs ?? 15;
-  let element: { elem: ElementHandle<Element> | null; status: string };
-  do {
-    await (await page.waitForSelector('#addToStay'))?.click();
-    element = await Promise.race([
-      page
-        .waitForSelector('#mat-checkbox-1-input')
-        .then((elem) => ({ elem, status: 'SUCCESS' })),
-      page
-        .waitForSelector('#genericDialog')
-        .then((elem) => ({ elem, status: 'FAILURE' }))
-    ]);
-    if (element.status == 'SUCCESS') {
-      break;
-    } else if (new Date() <= retryDeadline) {
-      logger.info(
-        `Could not add reservation. Retrying in ${retryIntervalInSecs} seconds.`
+  const fillCard$ = () =>
+    page
+      .waitForSelector('#cardNumber')
+      .pipe(
+        asyncTap((el) =>
+          el?.type(props.cardDetails.number.toString(), { delay: 50 })
+        )
       );
-      await new Promise((r) => setTimeout(r, retryIntervalInSecs * 1000));
-      await page.reload();
-    } else {
-      logger.info('Could not add reservation. Retry limit exceeded. Exiting');
-      throw new RetryableError('Could not add reservation');
-    }
-  } while (true);
-  await element.elem?.click();
-  logger.info('Added to cart. Proceeding with forms');
-  await (await page.waitForSelector('#confirmReservationDetails'))?.click();
-  await (await page.waitForSelector('#proceedToCheckout'))?.click();
-  await (await page.waitForSelector('#mat-checkbox-2-input'))?.click();
-  await (await page.waitForSelector('#confirmPolicies'))?.click();
-  await (await page.waitForSelector('#confirmAccountDetails'))?.click();
-  await (await page.waitForSelector('#confirmOccupant'))?.click();
-  const adultsSelection = await page.waitForSelector(
-    '#booking-1-sub-capacity-1-field'
-  );
-  await adultsSelection?.press('Backspace');
-  await adultsSelection?.type(props.partyInfo.adults.toString(), { delay: 50 });
-  await (await page.waitForSelector('#partyInfoButton'))?.click();
-  await (await page.waitForSelector('#confirmAdditionalInformation'))?.click();
-  await (await page.waitForSelector('#addOnsOptions'))?.click();
-  await (
-    await page.waitForSelector('#cardNumber')
-  )?.type(props.cardDetails.number.toString(), { delay: 50 });
-  await (
-    await page.waitForSelector('#cardHolderName')
-  )?.type(props.cardDetails.nameOnCard, { delay: 50 });
-  await (await page.waitForSelector('#cardExpiryMonth'))?.click();
-  await page.waitForSelector('#cardExpiryMonth-panel');
+  const happyPath$: Observable<ReservationResult> = page
+    .waitForSelector('#mat-checkbox-1-input')
+    .pipe(asyncTap((el) => el?.click()))
+    .pipe(
+      raceWith(
+        page.waitForSelector('#confirmButton').pipe(
+          asyncTap((el) => el?.click()),
+          asyncTap(() =>
+            page
+              .waitForSelector('#mat-checkbox-1-input')
+              .pipe(asyncTap((el) => el?.click()))
+          )
+        )
+      ),
+      tap(() => logger.info('Added to cart. Proceeding with forms')),
+      asyncTap(() =>
+        page
+          .waitForSelector('#confirmReservationDetails')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#proceedToCheckout')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#mat-checkbox-2-input')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#confirmPolicies')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#confirmAccountDetails')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#confirmOccupant')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(() =>
+        page.waitForSelector('#booking-1-sub-capacity-1-field').pipe(
+          asyncTap((el) => el?.press('Backspace')),
+          asyncTap((el) =>
+            el?.type(props.partyInfo.adults.toString(), { delay: 50 })
+          )
+        )
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#partyInfoButton')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#confirmAdditionalInformation')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#addOnsOptions')
+          .pipe(
+            asyncTap((el) => el?.click()),
+            asyncTap(() => fillCard$())
+          )
+          .pipe(raceWith(fillCard$()))
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#cardHolderName')
+          .pipe(
+            asyncTap((el) =>
+              el?.type(props.cardDetails.nameOnCard, { delay: 50 })
+            )
+          )
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#cardExpiryMonth')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(() =>
+        page.waitForSelector('#cardExpiryMonth-panel').pipe(
+          concatMap(() =>
+            page.waitForSelector(
+              `xpath=//span[contains(., '${props.cardDetails.expiringMonth}')]`
+            )
+          ),
+          asyncTap((el) => el?.click())
+        )
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#cardExpiryYear')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(() =>
+        page.waitForSelector('#cardExpiryYear-panel').pipe(
+          concatMap(() =>
+            page.waitForSelector(
+              `xpath=//span[contains(., '${props.cardDetails.expiringYear}')]`
+            )
+          ),
+          asyncTap((el) => el?.click())
+        )
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#cardCvv')
+          .pipe(
+            asyncTap((el) =>
+              el?.type(props.cardDetails.securityCode.toString(), { delay: 50 })
+            )
+          )
+      ),
+      asyncTap(() =>
+        page
+          .waitForSelector('#applyPaymentButton')
+          .pipe(tap((el) => el?.click()))
+      ),
+      map(() => 'SUCCESS'),
+      catchError((e) => {
+        logger.error(e, 'Failed during reservation process. Exiting');
+        return of('FAILURE' as ReservationResult);
+      })
+    ) as Observable<ReservationResult>;
 
-  await (
-    await page.waitForSelector(
-      `xpath=//span[contains(., '${props.cardDetails.expiringMonth}')]`
-    )
-  )?.click();
-  await (await page.waitForSelector('#cardExpiryYear'))?.click();
-  await page.waitForSelector('#cardExpiryYear-panel');
-  await (
-    await page.waitForSelector(
-      `xpath=//span[contains(., '${props.cardDetails.expiringYear}')]`
-    )
-  )?.click();
-  await (
-    await page.waitForSelector('#cardCvv')
-  )?.type(props.cardDetails.securityCode.toString(), { delay: 50 });
-  await (await page.waitForSelector('#applyPaymentButton'))?.click();
-  logger.info('Reservation completed successfully');
-  return 'SUCCESS';
+  const failedPath$: Observable<ReservationResult> = of().pipe(
+    asyncTap(() => {
+      if (new Date() <= retryDeadline) {
+        logger.info(
+          `Could not add reservation. Retrying in ${retryIntervalInSecs} seconds.`
+        );
+
+        return of().pipe(
+          asyncTap(() => page.reload()),
+          tap(() => {
+            throw new RetryableError();
+          })
+        );
+      }
+      return of('FAILURE');
+    })
+  );
+
+  const successCheck$: Observable<ReservationResult> = page
+    .waitForSelector('#addToStay')
+    .pipe(
+      asyncTap((el) => el?.click()),
+      map(() => 'SUCCESS')
+    );
+  const failedCheck$: Observable<ReservationResult> = page
+    .waitForSelector('#genericDialog')
+    .pipe(map(() => 'FAILURE'));
+
+  return race(successCheck$, failedCheck$).pipe(
+    catchError((e) => {
+      logger.error(e, 'Unknown error encountered. Exiting');
+      return of('FAILURE');
+    }),
+    concatMap((result) =>
+      iif(() => result === 'SUCCESS', happyPath$, failedPath$)
+    ),
+    retry({
+      delay: retryIntervalInSecs * 1000
+    })
+  );
 }
 
 export function makeReservation(
@@ -143,88 +287,86 @@ export function makeReservation(
   return props.source$.pipe(
     throwIfEmpty(() => new NoResultsError()),
     take(1),
-    map(async (input) => {
-      const browser = await getBrowser();
-      try {
-        const page = await browser.newPage();
-        await page.goto('http://camping.bcparks.ca');
-        await login(props.authDetails, page);
-        logger.info('Navigating to resource page');
-        await page.goto(createLink(input));
-        const reserveFn = await reserve(
-          {
-            ...input,
-            ...props
-          },
-          page
-        );
-        return reserveFn;
-      } catch (e) {
-        logger.error(e, 'Error occurred. Catching to close browser');
-        throw e;
-      } finally {
-        await browser.close();
-      }
-    }),
-    concatMap((reserveFn) => from(reserveFn)),
-    catchError((e: Error) => {
-      switch (true) {
-        case e instanceof RetryableError:
-          logger.info(
-            "Could not finish reservation. Will retry if there's any attempt left"
-          );
-          return throwError(() => new Error('Throwing to retry'));
-
-        case e instanceof NoResultsError:
-          logger.info(
-            'No available dates within searched parameters. Exiting.'
-          );
-          break;
-        default:
-          logger.error(`Unexpected error. terminating. Stacktrace: ${e.stack}`);
-      }
-      return of('FAILURE' as ReservationResult);
-    }),
-    retry(3)
+    combineLatestWith(getBrowser()),
+    concatMap(([input, browser]) =>
+      from(browser.newPage()).pipe(
+        map((page) => ({ input, browser, page })),
+        asyncTap(({ page }) => page.goto('http://camping.bcparks.ca')),
+        asyncTap(({ page }) => login(props.authDetails, page)),
+        tap(() => logger.info('Navigating to resource page')),
+        asyncTap(({ input, page }) => page.goto(createLink(input))),
+        concatMap((args) =>
+          reserve({ ...props, ...args.input }, args.page).pipe(
+            map((result) => ({ ...args, result }))
+          )
+        ),
+        map(({ result }) => result),
+        catchError((e: Error) => {
+          switch (true) {
+            case e instanceof NoResultsError:
+              logger.info(
+                'No available dates within searched parameters. Exiting.'
+              );
+              break;
+            default:
+              logger.error(
+                `Unexpected error. terminating. Stacktrace: ${e.stack}`
+              );
+          }
+          return of('FAILURE' as ReservationResult);
+        }),
+        asyncTap(() => browser.close())
+      )
+    )
   );
 }
 
 export function fromNotification(
   reservationDetails: ReservationDetails & { authDetails: AuthDetails }
-) {
-  return from(getBrowser()).pipe(
-    map(async (browser) => {
-      const page = await browser.newPage();
-      try {
-        logger.info('Starting process from notification');
-        await page.goto('http://camping.bcparks.ca');
-        await login(reservationDetails.authDetails, page);
-        logger.info('Navigating to notifications page');
-        await page.goto(
-          'http://camping.bcparks.ca/account/notification-dashboard'
-        );
-        await page.waitForNavigation();
-        const availableReservation = await page.$$('[id^="view-on-map"]');
-        if (!availableReservation || availableReservation.length == 0) {
-          logger.info('No reservation available. Exiting');
-          return 'FAILURE';
+): Observable<ReservationResult> {
+  const processNotification = (
+    browser: BrowserWrapper
+  ): Observable<ReservationResult> =>
+    of(null).pipe(
+      concatMap(() =>
+        browser.newPage().pipe(map((page) => ({ browser, page })))
+      ),
+      tap(() => logger.info('Starting process from notification')),
+      asyncTap(({ page }) => page.goto('http://camping.bcparks.ca')),
+      asyncTap(({ page }) => login(reservationDetails.authDetails, page)),
+      asyncTap(({ page }) =>
+        page.goto('http://camping.bcparks.ca/account/notification-dashboard')
+      ),
+      asyncTap(({ page }) => page.waitForNavigation()),
+      asyncTap(({ page }) =>
+        page
+          .waitForSelector('[id^="view-on-map"]')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      delay(3000),
+      asyncTap(({ page }) =>
+        page
+          .waitForSelector('div.leaflet-marker-icon.map-icon.icon-available')
+          .pipe(asyncTap((el) => el?.click()))
+      ),
+      asyncTap(({ page }) => reserve(reservationDetails, page)),
+      catchError((e) => {
+        if (e instanceof NoResultsError) {
+          logger.info('No available sites found. Exiting');
+        } else {
+          logger.error(e, 'Error occurred. Catching to close browser');
         }
-        logger.info('Available reservation found on notifications');
-        await page.waitForNavigation();
-        await (await page.$$('[data-availability="icon-available"]'))
-          .at(0)
-          ?.click();
-        logger.info('Found available resource on map');
-        return await reserve(reservationDetails, page);
-      } catch (e) {
-        logger.error(e, 'Error occurred. Catching to close browser');
-        throw e;
-      } finally {
-        await browser.close();
-      }
-    }),
-    concatMap((reserveFn) => from(reserveFn))
-  );
+        return of('FAILURE');
+      })
+    ) as Observable<ReservationResult>;
+
+  return getBrowser().pipe(
+    concatMap((browser) =>
+      processNotification(browser).pipe(map((result) => ({ browser, result })))
+    ),
+    asyncTap(({ browser }) => browser.close()),
+    map(({ result }) => result)
+  ) as Observable<ReservationResult>;
 }
 
 function createLink(reservationRequest: ComposeAvailabilityOutput): string {

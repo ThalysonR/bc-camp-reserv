@@ -1,6 +1,8 @@
 import { Observable } from 'rxjs';
+import { MapResource } from './client/model/map';
+import { ResourceLocation } from './client/model/resourceLocation';
 
-export type ReservationResult = "SUCCESS" | "FAILURE";
+export type ReservationResult = 'SUCCESS' | 'FAILURE';
 
 export interface CreateReservation {
   source$: Observable<ComposeAvailabilityOutput>;
@@ -45,7 +47,11 @@ export interface ComposeAvailabilityInput {
   dateRanges: SearchDateRange[];
   nights: string;
   preferWeekend?: boolean;
+  mapsResourceLocation$?: Observable<[ComposedMaps, ComposedResourceLocations]>;
 }
+
+export type ComposedMaps = Record<string, (MapResource & { mapId: string })[]>;
+export type ComposedResourceLocations = Record<string, ResourceLocation>;
 
 export interface SearchDateRange {
   startDate: string;
@@ -68,8 +74,9 @@ export interface ComposeAvailabilityOutput {
   retryDetails?: RetryDetails;
 }
 
-export type ReservationConfig = ComposeAvailabilityInput & ReservationDetails & {
-  id: string;
-};
+export type ReservationConfig = ComposeAvailabilityInput &
+  ReservationDetails & {
+    id: string;
+  };
 
 export type ReservationConfigRecord = ReservationConfig[];

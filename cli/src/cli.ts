@@ -6,6 +6,7 @@ import { makeReservation } from 'reservation-creator';
 import { getComposedAvailability } from 'reservation-creator';
 import { toArray } from 'rxjs';
 import { reservationDetails } from 'reservation-creator';
+import { handler as fromNotification } from 'reservation-creator/lambda/createReservationFromNotification';
 
 const client = new BcCampingClient(fetch);
 let debug;
@@ -171,17 +172,42 @@ program
       nights: '1',
       preferWeekend: false
     });
-    makeReservation({
-      source$,
-      partyInfo: {
-        adults: 4
+    // makeReservation({
+    //   source$,
+    //   partyInfo: {
+    //     adults: 4
+    //   },
+    //   ...reservationDetails,
+    //   retryDetails: {
+    //     retryIntervalInSecs: 2,
+    //     retryTimeInMins: 2
+    //   }
+    // }).subscribe();
+    await fromNotification(
+      {
+        Records: [
+          {
+            ses: {
+              // @ts-ignore
+              mail: {
+                headers: [
+                  {
+                    name: 'from',
+                    value: 'thalysonr.castro@hotmail.com'
+                  },
+                  {
+                    name: 'subject',
+                    value: 'bamberton'
+                  }
+                ]
+              }
+            }
+          }
+        ]
       },
-      ...reservationDetails,
-      retryDetails: {
-        retryIntervalInSecs: 2,
-        retryTimeInMins: 2
-      }
-    }).subscribe();
+      null,
+      null
+    );
   });
 
 program.parse();
